@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+
+<head>
+	<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+	
+	<title>
+		3D Scan of a Turkey Trophy
+	</title>
+
+	<!-- include three.js library -->
+	<script src='./js/three.js'></script>
+
+	<!-- include three.js load GLTF -->
+	<script src='./js/GLTFLoader.js'></script> 
+
+
+	<!-- include jsartookit -->
+	<script src="./js/jsartoolkit5/artoolkit.min.js"></script>
+	<script src="./js/jsartoolkit5/artoolkit.api.js"></script>
+
+	<script src="./js/ar-threex.js"></script>
+	<!--Set Base URL for the THEEx Library to reference normally '../' -->
+	<script>THREEx.ArToolkitContext.baseURL = './js/'</script>
+
+</head>
+
+<body style='margin : 0px; overflow: hidden; font-family: Monospace;'>
+
+<!--
+	AR Display Created by Eric Greenberg using CSUStan Fab Lab images.
+ 	Based on the AR.js library and examples created by Jerome Etienne: https://github.com/jeromeetienne/AR.js/ and by Lee Stemkoski: https://github.com/stemkoski
+-->
+
+<script>
+
+	//Initialize varible names the correct scope for later use.
+	var scene, camera, renderer, clock, deltaTime, totalTime;
+	var arToolkitSource, arToolkitContext;
+	
+	//Initialize an object on the outer most scope to be used as a global variable (object values accesed by key-value pairs will be referenced by address rather than by value)
+	var globalVar = {
+		patternName: "largeLambda", //.patt will be added in-code
+		objectFileName: "Turkey_with_color_4-2023_2Units.gltf",
+		loadedModels: {},
+		planetNameArray: [ "Sun", "Mercury", "Venus", "Earth", "Mars", "Jupiter", "Saturn", "Uranus", "Neptune", "Pluto" ], //this array will be used to name and access the generated meshes
+		Object3dContainers: {},
+		userMesh: {}, //this object will contain the addresses of the generated meshes so they can be manilpulated anywhere in the code.
+		markerRoots: [], //The marker roots need to be accessed to correct smoothing issues
+		markerControls: [],
+		smoothedRoot: [],
+		smoothedControls: [],
+		userMeshGroups: {},
+		userObjectGroups: {},
+		orphanObject: {},
+		orphanMesh: {}
+
+	};
+
+	//Initialize system
+	initialize();
+
+	//trigger animation loop
+	animate();
+
+	function initialize(){
+
+		//Create the ThreeJS Scene
+		scene = new THREE.Scene(); //naming the scene "scene" for the sake of simplicity
+
+		//Set up light so the WebGL rendered objects will be visible
+		//Gnerarate the light.
+		//in this case, an ambient liight with the color set to Gray80  (hex code CC CC CC), and a mid-level intensity -- 50%
+		let ambientLight = new THREE.AmbientLight( 0xffffff, 1.0 );
+		//Add the light to the scene so it will exisit in the same space as the rendered objects
+		scene.add( ambientLight );
+		
+		//Generate a camera to view the objects
+		//camera = new THREE.Camera();
+
+		camera = new THREE.PerspectiveCamera(
+		//camera = new THREE.DeviceOrientationControls(
+  			70, // Field of view
+			window.innerWidth / window.innerHeight * window.devicePixelRatio, //window.innerWidth / window.innerHeight, // Aspect ratio
+  			0.05, // Near clipping plane
+  			1000 // Far clipping plane
+		);
+
+		//Add the camera to the scene so it will exist in the same space as the objects
+		scene.add(camera);
+
+		//Generate a renderer and set the parameters
+		renderer = new THREE.WebGLRenderer({
+			antialias : true, //Antialias to get smooth edges
+			alpha: true //Alpha (transparency) support will be needed to make somethings invisible
+		});
+
+		renderer.setClearColor(new THREE.Color('lightgrey'), 0); //Think of this as the same technology behind a weatherman's green screen -- you tell it a color you want to target (in this case, gray), and how visible you want it to be (in this case, 0). This will let us see the camera feed behind the rendered objects.
+		renderer.setSize( 640, 480 ); //set the size in pixesl of the renderer -- 640x480 is an early resolution from Standard VGA days.
+		renderer.domElement.style.position = 'absolute'; //dom elements are a technical way of saying "a piece of HTML" -- this code makes sure the user can't scroll around the screen and locks the big render in place.
+		renderer.domElement.style.top = '0px'; //Again, targeting a piece of HTML -- this time it's removing padding in the web browser so the render window will fill the whole screen
+		renderer.domElement.style.left = '0px';//Again, targeting a piece of HTML -- this time it's removing padding in the web browser so the render window will fill the whole screen
+		document.body.appendChild( renderer.domElement ); //This code targets the body of the HTML and adds the render that was created in code so there's something for the user to look at.
+
+		clock = new THREE.Clock(); //this "clock" will allow the code to animate on a schedule
+		deltaTime = 0; //varible for use in the clock/animation loop
+		totalTime = 0;//varible for use in the clock/animation loop
+		
+		///////////////////////////////////////////////////////////////////////
+		// Setup arToolkitSource
+		///////////////////////////////////////////////////////////////////////
+
+		//The arToolkitSource allows us to access the camera on a user's device. This is done through some fancey WebAssembly (WASM) code --  code for accessing a wide range of hardware through Javascript via a virtual machine.
+		arToolkitSource = new THREEx.ArToolkitSource({
+			sourceType : 'webcam',
+			sourceWidth: window.innerWidth,
+			sourceHeight: window.innerHeight,
+			displayWidth: window.innerWidth,
+			displayHeight: window.innerHeight
+		});
+
+		//Make sure that if the browser window changes size, the arToolkit is aware of it so it can re-render to fit the window.
+		
+		function onResize() {
+			arToolkitSource.onResizeElement()
+			arToolkitSource.copyElementSizeTo(renderer.domElement)
+			if (window.arToolkitContext) { //The arToolKitContext is generated in a differnt function, so check that the arToolkitContext is actually on the Window before searching it.
+				if (window.arToolkitContext.arController !== null) {
+					arToolkitSource.copyElementSizeTo(window.arToolkitContext.arController.canvas)
+				}
+			}
+		}
+
+		window.addEventListener('load', function () {
+			arToolkitSource.onResizeElement();
+				arToolkitSource.copyElementSizeTo(renderer.domElement);
+				if (window.arToolkitContext) { //The arToolKitContext is generated in a differnt function, so check that the arToolkitContext is actually on the Window before searching it.
+					if (window.arToolkitContext.arController !== null) {
+						arToolkitSource.copyElementSizeTo(window.arToolkitContext.arController.canvas)
+					}
+				}
+		});
+
+		//Tell AR toolkit to initialise. if it's resized it will match the same as the renderer on the HTML page.
+		arToolkitSource.init(function onReady(){
+			onResize();
+			//arToolkitSource.copyElementSizeTo(arToolkitContext.arController.canvas);
+			//arToolkitSource.onResize(renderer.domElement);
+		});
+		
+		// handle resize event
+		window.addEventListener('resize', function(){
+			onResize();
+		});
+
+	
+	
+		/////////////////////////////////////////////////////////////////
+		// Setup the arToolkitContext
+		/////////////////////////////////////////////////////////////////	
+
+		// create atToolkitContext to handle the webcam
+		arToolkitContext = new THREEx.ArToolkitContext({
+			cameraParametersUrl: 'data/camera_para.dat',
+			detectionMode: 'mono'
+		});
+		
+		//Copy projection matrix to the camera (when the initialization is complete) so we can create the illusion of objects in 3D space
+		arToolkitContext.init( function onCompleted(){
+			camera.projectionMatrix.copy( arToolkitContext.getProjectionMatrix() );
+		});
+
+		//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+		// Setup markerRoots -- printed images that are prepared in advanced to be trackable by the Augmented Reality code
+		//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+		//Make a ThreeJS Texture Loader to bring in images to apply to 3D objects
+		let loader = new THREE.TextureLoader();	
+		//Make a ThreeJS GLTF Loader to bring in GLTF files
+		const threeGLTFLoader = new THREE.GLTFLoader();
+
+		var loadedModels = {};
+		var setModel = function(modelName, passedModel){
+			globalVar.loadedModels[modelName] = passedModel;
+		};
+		var getModel = function(modelName){
+			return globalVar.loadedModels[modelName];
+		};
+
+		let setupGLTF = function( objectName, objectFileName, patternName){
+			//load the texture using a texture loader, 
+			//let texture = loader.load( 'images/planets/' + textureFileName, render );
+
+			//Make a ThreeJS group that will be added to the scene later.
+			let markerRoot = new THREE.Group();
+			markerRoot.name = objectName;
+
+			globalVar.markerRoots.push(markerRoot); //store an accesspoint to the markerRoot memory address.
+
+			//Add the ThreeJS Group to the svene. Once added, the markerRoot varible name can be rewritten within this scope without damaging the previously used structures.
+			scene.add(markerRoot);
+
+			//If you need to reuse the ThreeX AR Marker Control, then you can set it to a varible like let markerControls = new THREEx.ArMarkerControls(...), for now, just triggering it is fine.
+			//Use the AR Marker Controlls to connect the pattern and the object together
+			
+			//var markerControls = new THREEx.ArSmoothedControls(markerRoot, { //broken
+			
+			//var markerControls = new THREEx.ArSmoothedControls(arToolkitContext, markerRoot, {
+			var markerControls = new THREEx.ArMarkerControls(arToolkitContext, markerRoot, {
+				type : 'pattern', 
+				patternUrl : "data/" + patternName + ".patt",
+				
+				smooth: true, //Activate smoothing
+
+				smoothCount: 5, // number of matrices to smooth tracking over, more = smoother but slower follow                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    
+	    		smoothTolerance: 0.01, // distance tolerance for smoothing, if smoothThreshold # of matrices are under tolerance, tracking will stay still
+	    		smoothThreshold: 2 //Wobble control	// threshold for smoothing, will keep still unless enough matrices are over tolerance
+	    		
+			});
+			globalVar.markerControls.push(markerControls); //store an access point to the markerControls memory address.
+
+
+			// interpolates from last position to create smoother transitions when moving.
+			// parameter lerp values near 0 are slow, near 1 are fast (instantaneous).
+			let smoothedRoot = new THREE.Group();
+			scene.add(smoothedRoot);
+			smoothedControls = new THREEx.ArSmoothedControls(smoothedRoot, {
+				lerpPosition: 0.8,
+				lerpQuaternion: 0.8,
+				lerpScale: 1,
+				// minVisibleDelay: 1,
+				// minUnvisibleDelay: 1,
+			});
+			globalVar.smoothedRoot.push(smoothedRoot); //store an access point to the smoothedRoot memory address.
+
+			globalVar.smoothedControls.push(smoothedControls); //store an access point to the smoothedControls memory address.
+
+
+			threeGLTFLoader.load(
+				"./resources/" + objectFileName,  //Resource URL
+				function (gltf){ //Called when the Resource is loaded
+				
+				//scene.add(gltf.scene)
+				
+		
+				//Set the scene
+				setModel("userModelAnimations", gltf.animations); // The Array<THREE.AnimationClip>
+				setModel("userModelScene", gltf.scene); // The THREE.Group
+				setModel("userModelScenes", gltf.scenes); // The Array<THREE.Group>
+				setModel("userModelCameras", gltf.cameras); //The Array<THREE.Camera>
+				setModel("userModelAsset", gltf.asset); // The entire Scene
+
+				setModel("userModel", gltf.scene.children[0]); //The Actual Object
+
+				////sometimes a loaded blender/.gltf model will have an offcenter pivot point
+				////due to more than one mesh being loaded, a parent mesh existing, etc.
+				////The reference returned from GLTFLoader is a wrapper around the entire export,
+				////(a.k.a. gltf.scene), which inturn is centered at 0,0,0. this means that the
+				////internal structure could be a mismatch. using mesh.geometry.center()
+				////should correct this. See https://discourse.threejs.org/t/set-pivot-point-to-center-of-object-imported-from-blender/14104/2
+				////for details.
+				//getModel("userModel").geometry.center(); 
+				
+/*
+				//Scale the model up by 10% to account for the marker border
+				getModel("userModel").scale.x = 0.1;
+				getModel("userModel").scale.y = 0.1;
+				getModel("userModel").scale.z = 0.1;
+*/
+				//Scale the model down to fit on the AR Marker
+				//getModel("userModel").scale.x = 1;
+				//getModel("userModel").scale.y = 1;
+				//getModel("userModel").scale.z = 1;
+
+				//getModel("userModel").position.y = (1.25/2);
+
+				//getModel("userModel").position.y = (1.25/2) -1.3;
+				//getModel("userModel").rotation.z = 0;//Correcting Snowman model
+				//getModel("userModel").children[0].rotation.y = 1;//Correcting snowman model
+				
+
+				//setModel("userModel").children[0]
+				////Safely load material
+
+				////( if userModel = gltf.scene;
+				//// use var objectMaterial = gltf.scenes[0].materials;
+				////Otherwise use var objectMaterial = gltf.materials;)
+
+				//var objectMaterial = gltf.materials;
+				//getModel("userModel").traverse(function(node) {
+				//	if (node instanceof THREE.Mesh) {
+						
+				//		node.material.map = objectMaterial;
+				//		console.log("node.material.map");//test code
+				//		console.log(node.material.map);//test code
+				//	}
+				//});
+
+				//Set the transparency
+				
+				//getModel("userModel").children[0].material.transparent = true;
+				//getModel("userModel").children[0].material.opacity = 0.9;
+
+				//getModel("userModel").material.transparent = true;
+				//getModel("userModel").material.opacity = 0.9;
+
+				////Set the initial position
+				//userModel.position.set(0, 0, 0);
+
+				getModel("userModel").position.set(0, 0, 0);
+
+				//console.log('Test 1 - getModel("userModel"): ');//Test code
+				//console.dir(getModel("userModel"));//Test code
+				//console.log('Test 1b - getModel("userModel").children[0]: ');//Test code
+				//console.dir(getModel("userModel").children[0]);//Test code
+
+				markerRoot.add( getModel("userModel")); //We're just adding the mesh, not the whole scene that's stored in getModel("userModel")
+
+				//add refresh here.
+				arToolkitSource.onResizeElement();
+				arToolkitSource.copyElementSizeTo(renderer.domElement);
+				if (window.arToolkitContext) { //The arToolKitContext is generated in a differnt function, so check that the arToolkitContext is actually on the Window before searching it.
+					if (window.arToolkitContext.arController !== null) {
+						arToolkitSource.copyElementSizeTo(window.arToolkitContext.arController.canvas)
+					}
+				}
+				
+
+			});
+
+			
+		};
+
+
+		let createGroup = function( textureFileName, objectName, patternName){
+			//load the texture using a texture loader, 
+			let texture = loader.load( 'images/planets/' + textureFileName, render );
+
+			//Make a ThreeJS group that will be added to the scene later.
+			let markerRoot = new THREE.Group();
+			markerRoot.name = objectName;
+
+			globalVar.markerRoots.push(markerRoot); //store an accesspoint to the markerRoot memory address.
+
+			//Add the ThreeJS Group to the svene. Once added, the markerRoot varible name can be rewritten within this scope without damaging the previously used structures.
+			scene.add(markerRoot);
+
+			//If you need to reuse the ThreeX AR Marker Control, then you can set it to a varible like let markerControls = new THREEx.ArMarkerControls(...), for now, just triggering it is fine.
+			//Use the AR Marker Controlls to connect the pattern and the object together
+			
+			var markerControls = new THREEx.ArMarkerControls(arToolkitContext, markerRoot, {
+				type : 'pattern', 
+				patternUrl : "data/ScienceDay2023MarkersAndPatterns/" + patternName + ".patt",
+				
+				smooth: true, //Activate smoothing
+
+				smoothCount: 5, // number of matrices to smooth tracking over, more = smoother but slower follow                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    
+	    		smoothTolerance: 0.01, // distance tolerance for smoothing, if smoothThreshold # of matrices are under tolerance, tracking will stay still
+	    		smoothThreshold: 2 //Wobble control	// threshold for smoothing, will keep still unless enough matrices are over tolerance
+	    		
+			});
+			globalVar.markerControls.push(markerControls); //store an access point to the markerControls memory address.
+
+
+			// interpolates from last position to create smoother transitions when moving.
+			// parameter lerp values near 0 are slow, near 1 are fast (instantaneous).
+			let smoothedRoot = new THREE.Group();
+			scene.add(smoothedRoot);
+			smoothedControls = new THREEx.ArSmoothedControls(smoothedRoot, {
+				lerpPosition: 0.8,
+				lerpQuaternion: 0.8,
+				lerpScale: 1,
+				// minVisibleDelay: 1,
+				// minUnvisibleDelay: 1,
+			});
+			globalVar.smoothedRoot.push(smoothedRoot); //store an access point to the smoothedRoot memory address.
+
+			globalVar.smoothedControls.push(smoothedControls); //store an access point to the smoothedControls memory address.
+
+			//Create a mesh to combine the geometry with a material so it can be loaded onto the marker
+			let mesh = new THREE.Mesh( 
+				new THREE.SphereGeometry(1, 32,32),
+								new THREE.MeshBasicMaterial({
+									color:0xffffff, 
+									map:texture, 
+									transparent:true, 
+									opacity:0.85
+								}) 
+			);
+
+			mesh.position.y = 1.25/2;
+
+			//markerRoot.add( mesh );
+			globalVar.userMesh[objectName] = mesh;
+			markerRoot.add( globalVar.userMesh[objectName] );
+		};
+
+		let addToGroup = function(meshToAdd, destination){
+
+			let createGroup = function( textureFileName, objectName, patternName){
+			//load the texture using a texture loader, 
+			let texture = loader.load( 'resources/images/' + textureFileName, render );
+
+			//Make a ThreeJS group that will be added to the scene later.
+			let markerRoot = new THREE.Group();
+			markerRoot.name = objectName;
+
+			globalVar.markerRoots.push(markerRoot); //store an accesspoint to the markerRoot memory address.
+
+			//Add the ThreeJS Group to the svene. Once added, the markerRoot varible name can be rewritten within this scope without damaging the previously used structures.
+			scene.add(markerRoot);
+
+			//If you need to reuse the ThreeX AR Marker Control, then you can set it to a varible like let markerControls = new THREEx.ArMarkerControls(...), for now, just triggering it is fine.
+			//Use the AR Marker Controlls to connect the pattern and the object together
+			
+			//var markerControls = new THREEx.ArSmoothedControls(markerRoot, { //broken
+			
+			//var markerControls = new THREEx.ArSmoothedControls(arToolkitContext, markerRoot, {
+			var markerControls = new THREEx.ArMarkerControls(arToolkitContext, markerRoot, {
+				type : 'pattern', 
+				patternUrl : "data/"+ patternName + ".patt",
+				
+				smooth: true, //Activate smoothing
+
+				smoothCount: 5, // number of matrices to smooth tracking over, more = smoother but slower follow                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    
+	    		smoothTolerance: 0.01, // distance tolerance for smoothing, if smoothThreshold # of matrices are under tolerance, tracking will stay still
+	    		smoothThreshold: 2 //Wobble control	// threshold for smoothing, will keep still unless enough matrices are over tolerance
+	    		
+			});
+			globalVar.markerControls.push(markerControls); //store an access point to the markerControls memory address.
+
+
+			// interpolates from last position to create smoother transitions when moving.
+			// parameter lerp values near 0 are slow, near 1 are fast (instantaneous).
+			let smoothedRoot = new THREE.Group();
+			scene.add(smoothedRoot);
+			smoothedControls = new THREEx.ArSmoothedControls(smoothedRoot, {
+				lerpPosition: 0.8,
+				lerpQuaternion: 0.8,
+				lerpScale: 1,
+				// minVisibleDelay: 1,
+				// minUnvisibleDelay: 1,
+			});
+			globalVar.smoothedRoot.push(smoothedRoot); //store an access point to the smoothedRoot memory address.
+
+			globalVar.smoothedControls.push(smoothedControls); //store an access point to the smoothedControls memory address.
+
+			//Create a mesh to combine the geometry with a material so it can be loaded onto the marker
+			let mesh = new THREE.Mesh( 
+				new THREE.SphereGeometry(1, 32,32),
+								new THREE.MeshBasicMaterial({
+									color:0xffffff, 
+									map:texture, 
+									transparent:true, 
+									opacity:0.85
+								}) 
+			);
+
+			mesh.position.y = 1.25/2;
+
+			//markerRoot.add( mesh );
+			globalVar.userMesh[objectName] = mesh;
+			markerRoot.add( globalVar.userMesh[objectName] );
+		};
+
+
+		};
+
+		let generateOrphanMesh = function(meshName, geometryType, geometryData, meshData){
+			//globalVar.orphanMesh
+			if(!meshName || !geometryType || !geometryData || !meshData){
+				return;
+			}
+
+
+			if(geometryType === "ring"){
+				
+				const ringGeo = new THREE.RingGeometry(
+					
+					geometryData.innerRadius,
+					geometryData.outerRadius,
+            		geometryData.segments
+				);
+
+        		const ringMat = new THREE.MeshBasicMaterial({
+            		map: loader.load( meshData, render ),
+					//textureLoader.load(meshData.texture),
+            		side: THREE.DoubleSide
+				});
+
+        		globalVar.orphanMesh.meshName = new THREE.Mesh(ringGeo, ringMat);
+
+			};
+
+
+		};
+
+		//Store pattern name:
+		let patternName = "largeLambda"; //.patt will be added in-code
+
+
+		//load the GLTF
+		setupGLTF("Snowman", globalVar.objectFileName, patternName);
+
+
+		
+	};
+
+	
+
+	function update(markerToUpdate, smoothControlToUpdate) {
+		
+		// update artoolkit on every frame
+		if ( arToolkitSource.ready !== false ){
+				arToolkitContext.update( arToolkitSource.domElement );
+		}
+
+		// additional code for smoothed controls
+		if(smoothControlToUpdate && markerToUpdate){
+			smoothControlToUpdate.update(markerToUpdate);
+		}
+		
+	};
+
+
+	function render() {
+		renderer.render( scene, camera );
+	};
+
+
+	function animate() {
+
+		/*
+		//Animate each object in the array
+		for (let i = 0; i < globalVar.planetNameArray.length; i++) {
+			
+			//console.log( "globalVar.userMesh." + globalVar.planetNameArray[i] + ": "); //Test code
+			//console.dir(globalVar.userMesh[globalVar.planetNameArray[i].toString()]); //Test code
+			globalVar.userMesh[globalVar.planetNameArray[i].toString()].rotation.y += 0.01;
+		}; 
+		*/
+
+		// Loop through all the markers and update the markers
+		for (let i = 0; i < globalVar.markerRoots.length; i++) {
+			//console.log("globalVar.markerRoots[i]: "); //Test Code
+			//console.dir(globalVar.markerRoots[i]); //test code
+
+			// Update the marker's position and orientation
+			update(globalVar.markerRoots[i].markerObject, globalVar.smoothedControls[i]);
+
+		}
+
+		requestAnimationFrame(animate);
+		deltaTime = clock.getDelta();
+		totalTime += deltaTime;
+		update();
+		render();
+
+	};
+
+
+</script>
+
+</body>
+
+
+</html>
